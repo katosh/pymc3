@@ -9,11 +9,13 @@ from .distribution import draw_values
 import numpy as np
 from scipy.special import logit as nplogit
 from scipy.special import expit
+from scipy.linalg import helmert
 
 
 __all__ = [
     "transform",
     "stick_breaking",
+    "ilr",
     "logodds",
     "interval",
     "log_exp_m1",
@@ -508,6 +510,61 @@ stick_breaking = StickBreaking()
 
 def t_stick_breaking(eps):
     return StickBreaking(eps)
+
+
+class ILR(Transform):
+    """
+    The Isometric Log Ratio transformation: https://link.springer.com/article/10.1023/A:1023818214614
+    Transforms k dimensional simplex space (k values in [0,1] and that sum to 1) to a K - 1 vector of real values.
+
+    Parameters
+    ----------
+    k : int
+        Dimension of the simplex.
+    """
+
+    name = "ilr"
+
+    def __init__(self, k):
+        self.k = k
+        self.A = helmert(k, full=False)
+        self.tA = theano.shared(self.A)
+
+    def forward(self, x_):
+        x = x_.T
+        lx = tt.log(x)
+        y = tt.dot(self.tA, lx)
+        return floatX(y.T)
+
+    def forward_val(self, x_):
+        x = x_.T
+        lx = np.log(x)
+        y = np.dot(self.A, lx)
+        return floatX(y.T)
+
+    def backward(self, y_):
+        y = tt.dot(y_, self.tA)
+        # "softmax" with vector support and no deprication warning:
+        e_y = tt.exp(y - tt.max(y, 0, keepdims=True))
+        x = e_y / tt.sum(e_y, 0, keepdims=True)
+        return floatX(x.T)
+
+    def backward_val(self, y_):
+        y = np.dot(y_, self.A)
+        e_y = np.exp(y - np.max(y, 0, keepdims=True))
+        x = e_y / np.sum(e_y, 0, keepdims=True)
+        return floatX(x.T)
+
+    def jacobian_det(self, y_):
+        y = tt.dot(y_, self.tA)
+        sy = tt.sum(y, 0, keepdims=True)
+        r = tt.concatenate([y+sy, tt.zeros(sy.shape)])
+        # stable according to: http://deeplearning.net/software/theano_versions/0.9.X/NEWS.html
+        sr = tt.log(tt.sum(tt.exp(r), 0, keepdims=True))
+        d = tt.log(self.k) + (self.k*sy) - (self.k*sr)
+        return tt.sum(d, 0).T
+
+ilr = ILR
 
 
 class Circular(ElemwiseTransform):
